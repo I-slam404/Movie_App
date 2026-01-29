@@ -1,0 +1,47 @@
+# Local properties
+local.properties
+
+# Gradle files
+.gradle/
+build/
+*.apk
+*.ap_
+*.aab
+
+# IDE files
+.idea/
+.idea/*
+*.iml
+*.iws
+*.ipr
+
+# Android Studio
+captures/
+.externalNativeBuild/
+.cxx/
+.DS_Store
+
+# Kotlin
+*.kotlin_module
+
+# Build results
+bin/
+gen/
+out/
+
+# Misc
+*.log
+*.swp
+*.swo
+*~
+.classpath
+.project
+.settings/
+.vscode/
+
+# Gradle wrapper
+!gradle/wrapper/gradle-wrapper.jar
+
+# Your custom ignores
+.env
+secrets.properties
