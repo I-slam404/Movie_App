@@ -1,36 +1,49 @@
 package com.islam404.movieapp.presentation.detail
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.hilt.navigation.compose.hiltViewModel
-import com.ramcosta.composedestinations.annotation.Destination
-import com.ramcosta.composedestinations.annotation.RootGraph
-import com.ramcosta.composedestinations.navigation.DestinationsNavigator
-import androidx.compose.animation.*
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
-import coil.compose.AsyncImage
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.islam404.movieapp.R
-import com.islam404.movieapp.presentation.detail.components.*
-import com.islam404.movieapp.util.Constants
+import com.islam404.movieapp.presentation.detail.components.AdditionalInfo
+import com.islam404.movieapp.presentation.detail.components.CastSection
+import com.islam404.movieapp.presentation.detail.components.GenreSection
+import com.islam404.movieapp.presentation.detail.components.MovieBackdrop
+import com.islam404.movieapp.presentation.detail.components.MovieInfo
+import com.islam404.movieapp.presentation.detail.components.ShimmerMovieDetail
+import com.ramcosta.composedestinations.annotation.Destination
+import com.ramcosta.composedestinations.annotation.RootGraph
+import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import kotlinx.coroutines.flow.collectLatest
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,9 +64,11 @@ fun MovieDetailScreen(
                 is MovieDetailContract.Effect.NavigateBack -> {
                     navigator.navigateUp()
                 }
+
                 is MovieDetailContract.Effect.ShowError -> {
                     snackbarHostState.showSnackbar(effect.message)
                 }
+
                 is MovieDetailContract.Effect.ShowMessage -> {
                     snackbarHostState.showSnackbar(effect.message)
                 }
@@ -61,39 +76,33 @@ fun MovieDetailScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.movie_details)) },
-                navigationIcon = {
-                    IconButton(
-                        onClick = {
-                            viewModel.onEvent(MovieDetailContract.Event.NavigateBack)
-                        }
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
-                )
-            )
-        },
-        snackbarHost = {
-            SnackbarHost(snackbarHostState) { data ->
-                Snackbar(
-                    snackbarData = data,
-                    shape = RoundedCornerShape(12.dp),
-                    containerColor = MaterialTheme.colorScheme.inverseSurface,
-                    contentColor = MaterialTheme.colorScheme.inverseOnSurface
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text(stringResource(R.string.movie_details)) }, navigationIcon = {
+            IconButton(
+                onClick = {
+                    viewModel.onEvent(MovieDetailContract.Event.NavigateBack)
+                }) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back"
                 )
             }
+        }, colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface
+        )
+        )
+    }, snackbarHost = {
+        SnackbarHost(snackbarHostState) { data ->
+            Snackbar(
+                snackbarData = data,
+                shape = RoundedCornerShape(12.dp),
+                containerColor = MaterialTheme.colorScheme.inverseSurface,
+                contentColor = MaterialTheme.colorScheme.inverseOnSurface
+            )
         }
-    ) { padding ->
+    }) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -103,12 +112,13 @@ fun MovieDetailScreen(
                 state.isLoading -> {
                     ShimmerMovieDetail()
                 }
+
                 state.error != null -> {
                     ErrorContent(
                         message = state.error ?: "Unknown error",
-                        onRetry = { viewModel.onEvent(MovieDetailContract.Event.Retry) }
-                    )
+                        onRetry = { viewModel.onEvent(MovieDetailContract.Event.Retry) })
                 }
+
                 state.movieDetail != null -> {
                     val movie = state.movieDetail!!
                     Column(
@@ -118,14 +128,12 @@ fun MovieDetailScreen(
                     ) {
                         // Backdrop Image
                         MovieBackdrop(
-                            backdropPath = movie.backdropPath,
-                            title = movie.title
+                            backdropPath = movie.backdropPath, title = movie.title
                         )
 
                         // Movie Info
                         MovieInfo(
-                            movie = movie,
-                            modifier = Modifier.padding(16.dp)
+                            movie = movie, modifier = Modifier.padding(16.dp)
                         )
 
                         // Genres
@@ -141,8 +149,7 @@ fun MovieDetailScreen(
                         // Cast
                         if (movie.cast.isNotEmpty()) {
                             CastSection(
-                                cast = movie.cast,
-                                modifier = Modifier.padding(horizontal = 16.dp)
+                                cast = movie.cast, modifier = Modifier.padding(horizontal = 16.dp)
                             )
                         }
 
@@ -150,8 +157,7 @@ fun MovieDetailScreen(
 
                         // Additional Info
                         AdditionalInfo(
-                            movie = movie,
-                            modifier = Modifier.padding(16.dp)
+                            movie = movie, modifier = Modifier.padding(16.dp)
                         )
 
                         Spacer(modifier = Modifier.height(32.dp))
@@ -164,12 +170,10 @@ fun MovieDetailScreen(
 
 @Composable
 fun ErrorContent(
-    message: String,
-    onRetry: () -> Unit
+    message: String, onRetry: () -> Unit
 ) {
     Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+        modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center
     ) {
         Column(
             modifier = Modifier.padding(32.dp),
@@ -177,8 +181,7 @@ fun ErrorContent(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                text = "😞",
-                style = MaterialTheme.typography.displayLarge
+                text = "😞", style = MaterialTheme.typography.displayLarge
             )
             Text(
                 text = message,
@@ -186,8 +189,7 @@ fun ErrorContent(
                 color = MaterialTheme.colorScheme.error
             )
             Button(
-                onClick = onRetry,
-                shape = RoundedCornerShape(12.dp)
+                onClick = onRetry, shape = RoundedCornerShape(12.dp)
             ) {
                 Text(stringResource(R.string.retry))
             }

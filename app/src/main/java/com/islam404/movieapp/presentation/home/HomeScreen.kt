@@ -12,7 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.islam404.movieapp.presentation.common.components.EmptyContent
 import com.islam404.movieapp.presentation.common.components.ErrorContent
 import com.islam404.movieapp.presentation.common.components.LoadingContent
