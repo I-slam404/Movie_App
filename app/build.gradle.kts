@@ -23,12 +23,15 @@ android {
             useSupportLibrary = true
         }
 
-        // BuildConfig fields
-        buildConfigField(
-            "String",
-            "TMDB_API_KEY",
-            "\"${project.findProperty("TMDB_API_KEY") ?: ""}\""
-        )
+        val properties = org.jetbrains.kotlin.konan.properties.Properties()
+        val localPropertiesFile = rootProject.file("local.properties")
+        if (localPropertiesFile.exists()) {
+            properties.load(localPropertiesFile.inputStream())
+        }
+
+        val tmdbApiKey = properties.getProperty("TMDB_API_KEY") ?: ""
+
+        buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         buildConfigField("String", "TMDB_BASE_URL", "\"https://api.themoviedb.org/3/\"")
         buildConfigField("String", "TMDB_IMAGE_BASE_URL", "\"https://image.tmdb.org/t/p/\"")
     }
@@ -81,6 +84,9 @@ dependencies {
     implementation(libs.compose.destinations.core)
     ksp(libs.compose.destinations.ksp)
     implementation(libs.androidx.navigation.compose)
+
+    // Splash Screen
+    implementation(libs.androidx.core.splashscreen)
 
     // Retrofit & OkHttp
     implementation(libs.retrofit)
