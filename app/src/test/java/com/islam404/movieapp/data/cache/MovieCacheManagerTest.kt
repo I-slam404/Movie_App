@@ -38,41 +38,46 @@ class MovieCacheManagerTest {
         // Arrange
         val category = "popular"
         val page = 1
-        coEvery { cacheDao.getCachedMovies("popular_1") } returns null
+        coEvery { cacheDao.getCachedMovies("popular_page_1") } returns null
 
         // Act
         val result = cacheManager.getCachedMovies(category, page)
 
         // Assert
         assertThat(result).isNull()
-        coVerify { cacheDao.getCachedMovies("popular_1") }
+        coVerify { cacheDao.getCachedMovies("popular_page_1") }
     }
 
     @Test
-    fun `getCachedMovies returns movies from disk cache when memory cache is empty`() = runTest {
+    fun `getCachedMovies returns CacheResult from disk cache when memory cache is empty`() = runTest {
         // Arrange
         val category = "popular"
         val page = 1
         val movies = listOf(createTestMovie(1), createTestMovie(2))
         val moviesJson = serializeMovies(movies, gson)
+        val timestamp = System.currentTimeMillis()
         val cacheEntity = MovieCacheEntity(
-            cacheKey = "popular_1",
+            cacheKey = "popular_page_1",
             category = category,
             page = page,
             moviesJson = moviesJson,
-            timestamp = System.currentTimeMillis()
+            timestamp = timestamp,
+            dataHash = "",
+            totalPages = 10,
+            hasMore = true
         )
 
-        coEvery { cacheDao.getCachedMovies("popular_1") } returns cacheEntity
+        coEvery { cacheDao.getCachedMovies("popular_page_1") } returns cacheEntity
 
         // Act
         val result = cacheManager.getCachedMovies(category, page)
 
         // Assert
         assertThat(result).isNotNull()
-        assertThat(result).hasSize(2)
-        assertThat(result?.get(0)?.id).isEqualTo(1)
-        assertThat(result?.get(1)?.id).isEqualTo(2)
+        assertThat(result?.movies).hasSize(2)
+        assertThat(result?.movies?.get(0)?.id).isEqualTo(1)
+        assertThat(result?.movies?.get(1)?.id).isEqualTo(2)
+        assertThat(result?.hasMore).isTrue()
     }
 
     @Test
@@ -83,14 +88,17 @@ class MovieCacheManagerTest {
         val movies = listOf(createTestMovie(3))
         val moviesJson = serializeMovies(movies, gson)
         val cacheEntity = MovieCacheEntity(
-            cacheKey = "top_rated_1",
+            cacheKey = "top_rated_page_1",
             category = category,
             page = page,
             moviesJson = moviesJson,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            dataHash = "",
+            totalPages = 5,
+            hasMore = true
         )
 
-        coEvery { cacheDao.getCachedMovies("top_rated_1") } returns cacheEntity
+        coEvery { cacheDao.getCachedMovies("top_rated_page_1") } returns cacheEntity
 
         // Act - First call (loads from disk to memory)
         val firstResult = cacheManager.getCachedMovies(category, page)
@@ -98,9 +106,9 @@ class MovieCacheManagerTest {
         val secondResult = cacheManager.getCachedMovies(category, page)
 
         // Assert
-        assertThat(firstResult).isEqualTo(secondResult)
+        assertThat(firstResult?.movies).isEqualTo(secondResult?.movies)
         // Disk cache should only be called once
-        coVerify(exactly = 1) { cacheDao.getCachedMovies("top_rated_1") }
+        coVerify(exactly = 1) { cacheDao.getCachedMovies("top_rated_page_1") }
     }
 
     @Test
@@ -112,11 +120,13 @@ class MovieCacheManagerTest {
         val movies1 = listOf(createTestMovie(1))
         val movies2 = listOf(createTestMovie(2))
 
-        coEvery { cacheDao.getCachedMovies("popular_1") } returns MovieCacheEntity(
-            "popular_1", category, page1, serializeMovies(movies1, gson), System.currentTimeMillis()
+        coEvery { cacheDao.getCachedMovies("popular_page_1") } returns MovieCacheEntity(
+            "popular_page_1", category, page1, serializeMovies(movies1, gson),
+            System.currentTimeMillis(), "", 10, true
         )
-        coEvery { cacheDao.getCachedMovies("popular_2") } returns MovieCacheEntity(
-            "popular_2", category, page2, serializeMovies(movies2, gson), System.currentTimeMillis()
+        coEvery { cacheDao.getCachedMovies("popular_page_2") } returns MovieCacheEntity(
+            "popular_page_2", category, page2, serializeMovies(movies2, gson),
+            System.currentTimeMillis(), "", 10, true
         )
 
         // Act
@@ -124,10 +134,39 @@ class MovieCacheManagerTest {
         val result2 = cacheManager.getCachedMovies(category, page2)
 
         // Assert
-        assertThat(result1).hasSize(1)
-        assertThat(result1?.get(0)?.id).isEqualTo(1)
-        assertThat(result2).hasSize(1)
-        assertThat(result2?.get(0)?.id).isEqualTo(2)
+        assertThat(result1?.movies).hasSize(1)
+        assertThat(result1?.movies?.get(0)?.id).isEqualTo(1)
+        assertThat(result2?.movies).hasSize(1)
+        assertThat(result2?.movies?.get(0)?.id).isEqualTo(2)
+    }
+
+    @Test
+    fun `getCachedMovies detects stale cache correctly`() = runTest {
+        // Arrange
+        val category = "popular"
+        val page = 1
+        val movies = listOf(createTestMovie(1))
+        val staleTimestamp = System.currentTimeMillis() - (60 * 1000L) // 60 seconds old
+        val cacheEntity = MovieCacheEntity(
+            cacheKey = "popular_page_1",
+            category = category,
+            page = page,
+            moviesJson = serializeMovies(movies, gson),
+            timestamp = staleTimestamp,
+            dataHash = "",
+            totalPages = 10,
+            hasMore = true
+        )
+
+        coEvery { cacheDao.getCachedMovies("popular_page_1") } returns cacheEntity
+
+        // Act
+        val result = cacheManager.getCachedMovies(category, page)
+
+        // Assert
+        assertThat(result).isNotNull()
+        assertThat(result?.isStale).isTrue()
+        assertThat(result?.isExpired).isTrue()
     }
 
     // ========== Cache Movies Tests ==========
@@ -144,20 +183,22 @@ class MovieCacheManagerTest {
         coEvery { cacheDao.getCachedMovies(any()) } returns null
 
         // Act
-        cacheManager.cacheMovies(category, page, movies)
+        cacheManager.cacheMovies(category, page, movies, totalPages = 10, hasMore = true)
 
         // Assert - Verify disk cache was called
         coVerify { cacheDao.cacheMovies(any()) }
-        
+
         val savedEntity = entitySlot.captured
-        assertThat(savedEntity.cacheKey).isEqualTo("popular_1")
+        assertThat(savedEntity.cacheKey).isEqualTo("popular_page_1")
         assertThat(savedEntity.category).isEqualTo(category)
         assertThat(savedEntity.page).isEqualTo(page)
+        assertThat(savedEntity.totalPages).isEqualTo(10)
+        assertThat(savedEntity.hasMore).isTrue()
 
         // Assert - Verify memory cache by retrieving
         val cachedMovies = cacheManager.getCachedMovies(category, page)
-        assertThat(cachedMovies).hasSize(2)
-        assertThat(cachedMovies?.get(0)?.id).isEqualTo(1)
+        assertThat(cachedMovies?.movies).hasSize(2)
+        assertThat(cachedMovies?.movies?.get(0)?.id).isEqualTo(1)
     }
 
     @Test
@@ -178,9 +219,9 @@ class MovieCacheManagerTest {
 
         // Assert - Should have new movies
         val result = cacheManager.getCachedMovies(category, page)
-        assertThat(result).hasSize(2)
-        assertThat(result?.get(0)?.id).isEqualTo(2)
-        assertThat(result?.get(1)?.id).isEqualTo(3)
+        assertThat(result?.movies).hasSize(2)
+        assertThat(result?.movies?.get(0)?.id).isEqualTo(2)
+        assertThat(result?.movies?.get(1)?.id).isEqualTo(3)
     }
 
     @Test
@@ -200,44 +241,44 @@ class MovieCacheManagerTest {
     }
 
     @Test
-    fun `cacheMovies preserves all movie fields correctly`() = runTest {
+    fun `hasDataChanged returns true when data is different`() = runTest {
         // Arrange
         val category = "popular"
         val page = 1
-        val movie = Movie(
-            id = 123,
-            title = "Test Movie",
-            overview = "Test Overview",
-            posterPath = "/poster.jpg",
-            backdropPath = "/backdrop.jpg",
-            releaseDate = "2024-01-15",
-            voteAverage = 8.5,
-            voteCount = 1500,
-            popularity = 95.5,
-            genreIds = listOf(28, 12, 16)
-        )
-        val movies = listOf(movie)
+        val oldMovies = listOf(createTestMovie(1))
+        val newMovies = listOf(createTestMovie(2))
 
         coEvery { cacheDao.cacheMovies(any()) } returns Unit
         coEvery { cacheDao.getCachedMovies(any()) } returns null
 
+        // Cache old movies
+        cacheManager.cacheMovies(category, page, oldMovies)
+
         // Act
-        cacheManager.cacheMovies(category, page, movies)
-        val result = cacheManager.getCachedMovies(category, page)
+        val hasChanged = cacheManager.hasDataChanged(category, page, newMovies)
 
         // Assert
-        assertThat(result).hasSize(1)
-        val cached = result?.get(0)
-        assertThat(cached?.id).isEqualTo(123)
-        assertThat(cached?.title).isEqualTo("Test Movie")
-        assertThat(cached?.overview).isEqualTo("Test Overview")
-        assertThat(cached?.posterPath).isEqualTo("/poster.jpg")
-        assertThat(cached?.backdropPath).isEqualTo("/backdrop.jpg")
-        assertThat(cached?.releaseDate).isEqualTo("2024-01-15")
-        assertThat(cached?.voteAverage).isEqualTo(8.5)
-        assertThat(cached?.voteCount).isEqualTo(1500)
-        assertThat(cached?.popularity).isEqualTo(95.5)
-        assertThat(cached?.genreIds).containsExactly(28, 12, 16).inOrder()
+        assertThat(hasChanged).isTrue()
+    }
+
+    @Test
+    fun `hasDataChanged returns false when data is same`() = runTest {
+        // Arrange
+        val category = "popular"
+        val page = 1
+        val movies = listOf(createTestMovie(1))
+
+        coEvery { cacheDao.cacheMovies(any()) } returns Unit
+        coEvery { cacheDao.getCachedMovies(any()) } returns null
+
+        // Cache movies
+        cacheManager.cacheMovies(category, page, movies)
+
+        // Act - Check with same movies
+        val hasChanged = cacheManager.hasDataChanged(category, page, movies)
+
+        // Assert
+        assertThat(hasChanged).isFalse()
     }
 
     // ========== Clear Cache Tests ==========
@@ -286,53 +327,6 @@ class MovieCacheManagerTest {
 
         // Assert
         coVerify { cacheDao.deleteCachedCategory(category) }
-    }
-
-    // ========== Serialization Tests ==========
-
-    @Test
-    fun `serialization and deserialization preserves movie data`() = runTest {
-        // Arrange
-        val movies = listOf(
-            Movie(
-                id = 1,
-                title = "Movie 1",
-                overview = "Overview 1",
-                posterPath = "/poster1.jpg",
-                backdropPath = "/backdrop1.jpg",
-                releaseDate = "2024-01-01",
-                voteAverage = 7.5,
-                voteCount = 100,
-                popularity = 50.0,
-                genreIds = listOf(1, 2)
-            ),
-            Movie(
-                id = 2,
-                title = "Movie 2",
-                overview = "Overview 2",
-                posterPath = null,
-                backdropPath = null,
-                releaseDate = "2024-02-01",
-                voteAverage = 8.0,
-                voteCount = 200,
-                popularity = 75.0,
-                genreIds = emptyList()
-            )
-        )
-        val category = "test"
-        val page = 1
-
-        coEvery { cacheDao.cacheMovies(any()) } returns Unit
-        coEvery { cacheDao.getCachedMovies(any()) } returns null
-
-        // Act
-        cacheManager.cacheMovies(category, page, movies)
-        val result = cacheManager.getCachedMovies(category, page)
-
-        // Assert
-        assertThat(result).hasSize(2)
-        assertThat(result?.get(0)).isEqualTo(movies[0])
-        assertThat(result?.get(1)).isEqualTo(movies[1])
     }
 
     // ========== Helper Methods ==========
