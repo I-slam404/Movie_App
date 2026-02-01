@@ -13,5 +13,8 @@ data class MovieCacheEntity(
     val category: String,
     val page: Int,
     val moviesJson: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val dataHash: String = "",
+    val totalPages: Int = 0,
+    val hasMore: Boolean = true
 )

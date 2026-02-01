@@ -12,8 +12,8 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 import com.islam404.movieapp.domain.usecase.GetTopRatedMoviesUseCase
 import com.islam404.movieapp.domain.usecase.GetNowPlayingMoviesUseCase
+import com.islam404.movieapp.util.AppLogger
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -30,6 +30,7 @@ class HomeViewModel @Inject constructor(
     val effect = _effect.receiveAsFlow()
 
     private var searchJob: Job? = null
+    private var loadJob: Job? = null
 
     init {
         onEvent(HomeContract.Event.LoadMovies)
@@ -71,14 +72,14 @@ class HomeViewModel @Inject constructor(
             loadMovies(page = 1)
         } else {
             searchJob = viewModelScope.launch {
-                delay(500)
                 performSearch(query.trim(), page = 1)
             }
         }
     }
 
     private fun performSearch(query: String, page: Int = 1) {
-        viewModelScope.launch {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
             _state.update { it.copy(isSearching = true) }
 
             searchMoviesUseCase(query, page).collect { result ->
@@ -86,7 +87,7 @@ class HomeViewModel @Inject constructor(
                     is Resource.Loading -> {
                         _state.update {
                             it.copy(
-                                isLoading = page == 1,
+                                isLoading = page == 1 && result.data == null,
                                 isLoadingMore = page > 1,
                                 error = null
                             )
@@ -98,7 +99,6 @@ class HomeViewModel @Inject constructor(
                             val updatedMovies = if (page == 1) {
                                 newMovies
                             } else {
-                                // Merge and remove duplicates by ID
                                 (currentState.movies + newMovies).distinctBy { it.id }
                             }
                             currentState.copy(
@@ -107,7 +107,7 @@ class HomeViewModel @Inject constructor(
                                 isSearching = true,
                                 movies = updatedMovies,
                                 currentPage = page,
-                                canLoadMore = newMovies.isNotEmpty(),
+                                canLoadMore = newMovies.size >= 20,
                                 error = null
                             )
                         }
@@ -117,7 +117,7 @@ class HomeViewModel @Inject constructor(
                             it.copy(
                                 isLoading = false,
                                 isLoadingMore = false,
-                                error = if (page == 1) result.message else null
+                                error = if (page == 1 && result.data == null) result.message else null
                             )
                         }
                         _effect.send(
@@ -132,7 +132,14 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun loadMovies(page: Int = 1, forceRefresh: Boolean = false) {
-        viewModelScope.launch {
+        // Cancel existing job only if loading page 1
+        if (page == 1) {
+            loadJob?.cancel()
+        }
+
+        loadJob = viewModelScope.launch {
+            AppLogger.d("HomeViewModel", ">>> loadMovies START: page=$page, force=$forceRefresh")
+
             val moviesFlow = when (_state.value.selectedCategory) {
                 HomeContract.MovieCategory.POPULAR -> {
                     getPopularMoviesUseCase(page, forceRefresh)
@@ -146,43 +153,67 @@ class HomeViewModel @Inject constructor(
             }
 
             moviesFlow.collect { result ->
+                AppLogger.d("HomeViewModel", "Resource: ${result::class.simpleName}, data size: ${result.data?.size}")
+
                 when (result) {
                     is Resource.Loading -> {
-                        _state.update {
-                            it.copy(
-                                isLoading = page == 1,
+                        val hasData = result.data != null
+                        AppLogger.d("HomeViewModel", "Loading: hasData=$hasData, page=$page")
+
+                        _state.update { currentState ->
+                            currentState.copy(
+                                isLoading = page == 1 && !hasData,
                                 isLoadingMore = page > 1,
+                                isRefreshing = hasData,
                                 error = null
                             )
                         }
                     }
+
                     is Resource.Success -> {
                         val newMovies = result.data ?: emptyList()
+                        AppLogger.d("HomeViewModel", "Success: ${newMovies.size} movies, page=$page")
+
                         _state.update { currentState ->
                             val updatedMovies = if (page == 1) {
+                                // Page 1: Replace all movies
                                 newMovies
                             } else {
-                                // Merge and remove duplicates by ID
-                                (currentState.movies + newMovies).distinctBy { it.id }
+                                // Pagination: Append new movies and remove duplicates
+                                val combined = currentState.movies + newMovies
+                                combined.distinctBy { it.id }
                             }
+
+                            AppLogger.d("HomeViewModel", "Updated movies count: ${updatedMovies.size}, canLoadMore: ${newMovies.size >= 20}")
+
                             currentState.copy(
                                 isLoading = false,
                                 isLoadingMore = false,
+                                isRefreshing = false,
                                 movies = updatedMovies,
                                 currentPage = page,
-                                canLoadMore = newMovies.isNotEmpty(),
+                                canLoadMore = newMovies.size >= 20, // TMDB returns 20 items per page
                                 error = null
                             )
                         }
                     }
+
                     is Resource.Error -> {
-                        _state.update {
-                            it.copy(
+                        val hasData = result.data != null
+                        AppLogger.e("HomeViewModel", "Error: ${result.message}, hasData=$hasData")
+
+                        _state.update { currentState ->
+                            currentState.copy(
                                 isLoading = false,
                                 isLoadingMore = false,
-                                error = if (page == 1) result.message else null
+                                isRefreshing = false,
+                                error = if (page == 1 && !hasData) result.message else null,
+                                // Keep existing movies if we have cached data in error
+                                movies = if (hasData) result.data!! else currentState.movies
                             )
                         }
+
+                        // Show error message
                         _effect.send(
                             HomeContract.Effect.ShowError(
                                 result.message ?: "Unknown error"
@@ -191,19 +222,27 @@ class HomeViewModel @Inject constructor(
                     }
                 }
             }
+
+            AppLogger.d("HomeViewModel", "<<< loadMovies END: page=$page")
         }
     }
 
     private fun loadMoreMovies() {
         val currentState = _state.value
-        if (currentState.isLoadingMore || !currentState.canLoadMore) {
+
+        // Prevent multiple simultaneous pagination requests
+        if (currentState.isLoadingMore || !currentState.canLoadMore || currentState.isLoading || currentState.isRefreshing) {
+            AppLogger.d("HomeViewModel", "loadMoreMovies BLOCKED: loadingMore=${currentState.isLoadingMore}, canLoadMore=${currentState.canLoadMore}, isLoading=${currentState.isLoading}, isRefreshing=${currentState.isRefreshing}")
             return
         }
 
+        val nextPage = currentState.currentPage + 1
+        AppLogger.d("HomeViewModel", "loadMoreMovies: Requesting page $nextPage")
+
         if (currentState.isSearching && currentState.searchQuery.isNotEmpty()) {
-            performSearch(currentState.searchQuery.trim(), page = currentState.currentPage + 1)
+            performSearch(currentState.searchQuery.trim(), page = nextPage)
         } else {
-            loadMovies(page = currentState.currentPage + 1)
+            loadMovies(page = nextPage, forceRefresh = false)
         }
     }
 
@@ -224,6 +263,7 @@ class HomeViewModel @Inject constructor(
 
     private fun changeCategory(category: HomeContract.MovieCategory) {
         searchJob?.cancel()
+        loadJob?.cancel()
 
         _state.update {
             it.copy(
@@ -242,18 +282,16 @@ class HomeViewModel @Inject constructor(
         if (_state.value.isSearching && _state.value.searchQuery.isNotEmpty()) {
             performSearch(_state.value.searchQuery.trim(), page = 1)
         } else {
-            loadMovies(page = 1)
+            loadMovies(page = 1, forceRefresh = true)
         }
     }
 
     private fun refresh() {
         searchJob?.cancel()
+        loadJob?.cancel()
 
         _state.update {
             it.copy(
-                searchQuery = "",
-                isSearching = false,
-                movies = emptyList(),
                 currentPage = 1,
                 canLoadMore = true
             )

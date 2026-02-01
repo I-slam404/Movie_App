@@ -12,101 +12,138 @@ import retrofit2.HttpException
 import java.io.IOException
 import javax.inject.Inject
 import com.islam404.movieapp.data.cache.MovieCacheManager
-import android.util.Log
+import com.islam404.movieapp.util.AppLogger
 
 class MovieRepositoryImpl @Inject constructor(
     private val api: TmdbApi,
     private val cacheManager: MovieCacheManager
 ) : MovieRepository {
 
-    private fun cachedThenFetchMovies(
+    /**
+     * Cache-First Strategy with Background Refresh
+     * 1. Check cache and emit immediately if exists
+     * 2. Always fetch fresh data from API (unless cache is very fresh)
+     * 3. Update cache and emit fresh data
+     */
+    private fun cacheFirstThenNetwork(
         category: String,
         page: Int,
         forceRefresh: Boolean,
-        fetchFromApi: suspend () -> List<Movie>
+        fetchFromApi: suspend () -> Pair<List<Movie>, Int> // Returns (movies, totalPages)
     ): Flow<Resource<List<Movie>>> = flow {
-        val cachedMovies = cacheManager.getCachedMovies(category, page)
+        AppLogger.d("MovieRepository", "=== [$category:$page] START (force=$forceRefresh) ===")
 
-        // 1) Emit cache immediately if present
-        if (cachedMovies != null) {
-            emit(Resource.Success(cachedMovies))
-            Log.d("MovieRepository", "Loaded from cache: $category page $page")
+        // Step 1: Check cache first
+        val cacheResult = if (!forceRefresh) {
+            cacheManager.getCachedMovies(category, page)
+        } else {
+            null
         }
 
-        // 2) Fetch strategy: always revalidate in background.
-        //    - If `forceRefresh` is true, we *must* hit network.
-        //    - If `forceRefresh` is false, we still fetch to update UI when new movies arrive.
-        val shouldFetch = true
-        if (!shouldFetch) return@flow
+        // Step 2: If we have cache, emit it immediately
+        if (cacheResult != null) {
+            AppLogger.d("MovieRepository", "[$category:$page] ✓ Cache HIT - emitting ${cacheResult.movies.size} movies (stale=${cacheResult.isStale})")
+            emit(Resource.Success(cacheResult.movies))
 
-        // 3) Indicate refresh (keep cached visible if any)
-        emit(Resource.Loading(cachedMovies))
-
-        try {
-            val freshMovies = fetchFromApi()
-
-            // Cache and emit fresh results
-            cacheManager.cacheMovies(category, page, freshMovies)
-
-            // Avoid pointless re-emits if data didn't change
-            if (freshMovies != cachedMovies) {
-                emit(Resource.Success(freshMovies))
+            // If cache is fresh (not stale), we might skip API call
+            if (!cacheResult.isStale && !forceRefresh) {
+                AppLogger.d("MovieRepository", "[$category:$page] ✓ Cache is FRESH - skipping API call")
+                return@flow
             }
-            Log.d("MovieRepository", "Loaded from API: $category page $page")
+
+            // Cache is stale, show loading with cached data visible
+            AppLogger.d("MovieRepository", "[$category:$page] ⟳ Cache is STALE - fetching fresh data...")
+            emit(Resource.Loading(cacheResult.movies))
+        } else {
+            // No cache, show loading without data
+            AppLogger.d("MovieRepository", "[$category:$page] ✗ Cache MISS - showing loading")
+            emit(Resource.Loading())
+        }
+
+        // Step 3: Fetch fresh data from API
+        try {
+            AppLogger.d("MovieRepository", "[$category:$page] → Calling API...")
+            val (freshMovies, totalPages) = fetchFromApi()
+            val hasMore = page < totalPages && freshMovies.isNotEmpty()
+
+            AppLogger.d("MovieRepository", "[$category:$page] ✓ API SUCCESS: ${freshMovies.size} movies (hasMore=$hasMore, totalPages=$totalPages)")
+
+            // Step 4: Check if data actually changed
+            val dataChanged = cacheManager.hasDataChanged(category, page, freshMovies)
+            AppLogger.d("MovieRepository", "[$category:$page] Data changed: $dataChanged")
+
+            // Step 5: Always update cache with fresh data
+            cacheManager.cacheMovies(
+                category = category,
+                page = page,
+                movies = freshMovies,
+                totalPages = totalPages,
+                hasMore = hasMore
+            )
+
+            // Step 6: Always emit fresh data (the ViewModel will decide if UI update is needed)
+            AppLogger.d("MovieRepository", "[$category:$page] ✓ Emitting fresh data")
+            emit(Resource.Success(freshMovies))
+
         } catch (e: HttpException) {
-            Log.e("MovieRepository", "HTTP Error ($category page $page): ${e.message}")
+            AppLogger.e("MovieRepository", "[$category:$page] ✗ HTTP Error: ${e.code()} - ${e.message()}")
             emit(
                 Resource.Error(
-                    message = e.localizedMessage ?: "An unexpected error occurred",
-                    data = cachedMovies
+                    message = "Server error: ${e.code()}",
+                    data = cacheResult?.movies
                 )
             )
         } catch (e: IOException) {
-            Log.e("MovieRepository", "Network Error ($category page $page): ${e.message}")
+            AppLogger.e("MovieRepository", "[$category:$page] ✗ Network Error: ${e.message}")
             emit(
                 Resource.Error(
-                    message = "No internet connection. Please check your network.",
-                    data = cachedMovies
+                    message = "No internet connection",
+                    data = cacheResult?.movies
                 )
             )
         } catch (e: Exception) {
-            Log.e("MovieRepository", "Unknown Error ($category page $page): ${e.message}")
+            AppLogger.e("MovieRepository", "[$category:$page] ✗ Unknown Error: ${e.message}")
             emit(
                 Resource.Error(
-                    message = e.localizedMessage ?: "An unexpected error occurred",
-                    data = cachedMovies
+                    message = e.localizedMessage ?: "Unknown error",
+                    data = cacheResult?.movies
                 )
             )
         }
+
+        AppLogger.d("MovieRepository", "=== [$category:$page] END ===")
     }
 
     override fun getPopularMovies(page: Int, forceRefresh: Boolean): Flow<Resource<List<Movie>>> =
-        cachedThenFetchMovies(
+        cacheFirstThenNetwork(
             category = "popular",
             page = page,
             forceRefresh = forceRefresh,
             fetchFromApi = {
-                api.getPopularMovies(page = page).results.map { it.toMovie() }
+                val response = api.getPopularMovies(page = page)
+                Pair(response.results.map { it.toMovie() }, response.totalPages)
             }
         )
 
     override fun getTopRatedMovies(page: Int, forceRefresh: Boolean): Flow<Resource<List<Movie>>> =
-        cachedThenFetchMovies(
+        cacheFirstThenNetwork(
             category = "top_rated",
             page = page,
             forceRefresh = forceRefresh,
             fetchFromApi = {
-                api.getTopRatedMovies(page = page).results.map { it.toMovie() }
+                val response = api.getTopRatedMovies(page = page)
+                Pair(response.results.map { it.toMovie() }, response.totalPages)
             }
         )
 
     override fun getNowPlayingMovies(page: Int, forceRefresh: Boolean): Flow<Resource<List<Movie>>> =
-        cachedThenFetchMovies(
+        cacheFirstThenNetwork(
             category = "now_playing",
             page = page,
             forceRefresh = forceRefresh,
             fetchFromApi = {
-                api.getNowPlayingMovies(page = page).results.map { it.toMovie() }
+                val response = api.getNowPlayingMovies(page = page)
+                Pair(response.results.map { it.toMovie() }, response.totalPages)
             }
         )
 
