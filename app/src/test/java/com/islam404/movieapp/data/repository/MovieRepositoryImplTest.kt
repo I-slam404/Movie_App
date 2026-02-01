@@ -9,12 +9,12 @@ import com.islam404.movieapp.domain.model.Movie
 import com.islam404.movieapp.util.Resource
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.Before
 import org.junit.Test
 import retrofit2.HttpException
-import retrofit2.Response
 import java.io.IOException
 
 /**
@@ -103,8 +103,11 @@ class MovieRepositoryImplTest {
     fun `getPopularMovies handles HTTP exception and returns cached data`() = runTest {
         // Arrange
         val cachedMovies = listOf(createTestMovie(1))
-        val httpException = mockk<HttpException> {
-            coEvery { localizedMessage } returns "HTTP 500 Error"
+
+        val httpException = mockk<HttpException>(relaxed = true) {
+            every { code() } returns 500
+            every { message() } returns "HTTP 500 Error"
+            every { localizedMessage } returns "HTTP 500 Error"
         }
 
         coEvery { cacheManager.getCachedMovies("popular", 1) } returns cachedMovies
