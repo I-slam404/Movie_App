@@ -22,11 +22,11 @@ coroutines = "1.10.2"
 lifecycleViewmodel = "2.10.0"
 materialIcons = "1.7.8"
 gson = "2.13.2"
-mockk = "1.13.8"
-coroutinesTest = "1.7.3"
-truth = "1.1.5"
+mockk = "1.14.9"
+coroutinesTest = "1.10.2"
+truth = "1.4.5"
 archCoreTesting = "2.2.0"
-turbine = "1.0.0"
+turbine = "1.2.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
