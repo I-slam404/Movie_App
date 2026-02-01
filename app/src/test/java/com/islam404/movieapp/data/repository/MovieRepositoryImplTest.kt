@@ -42,11 +42,19 @@ class MovieRepositoryImplTest {
         val cachedMovies = listOf(createTestMovie(1))
         val apiMovies = listOf(createTestMovie(1), createTestMovie(2))
         val movieDtos = apiMovies.map { createMovieDto(it.id) }
-        val responseDto = MovieResponseDto(1, movieDtos, 1, 2)
+        val responseDto = MovieResponseDto(1, movieDtos, 10, 200)
 
-        coEvery { cacheManager.getCachedMovies("popular", 1) } returns cachedMovies
+        val cacheResult = MovieCacheManager.CacheResult(
+            movies = cachedMovies,
+            isStale = true,
+            isExpired = false,
+            hasMore = true
+        )
+
+        coEvery { cacheManager.getCachedMovies("popular", 1) } returns cacheResult
         coEvery { api.getPopularMovies(1) } returns responseDto
-        coEvery { cacheManager.cacheMovies(any(), any(), any()) } returns Unit
+        coEvery { cacheManager.hasDataChanged("popular", 1, any()) } returns true
+        coEvery { cacheManager.cacheMovies(any(), any(), any(), any(), any()) } returns Unit
 
         // Act & Assert
         repository.getPopularMovies(1, false).test {
@@ -70,7 +78,7 @@ class MovieRepositoryImplTest {
 
         coVerify { cacheManager.getCachedMovies("popular", 1) }
         coVerify { api.getPopularMovies(1) }
-        coVerify { cacheManager.cacheMovies("popular", 1, any()) }
+        coVerify { cacheManager.cacheMovies("popular", 1, any(), 10, true) }
     }
 
     @Test
@@ -78,11 +86,12 @@ class MovieRepositoryImplTest {
         // Arrange
         val apiMovies = listOf(createTestMovie(1), createTestMovie(2))
         val movieDtos = apiMovies.map { createMovieDto(it.id) }
-        val responseDto = MovieResponseDto(1, movieDtos, 1, 2)
+        val responseDto = MovieResponseDto(1, movieDtos, 10, 40)
 
         coEvery { cacheManager.getCachedMovies("popular", 1) } returns null
         coEvery { api.getPopularMovies(1) } returns responseDto
-        coEvery { cacheManager.cacheMovies(any(), any(), any()) } returns Unit
+        coEvery { cacheManager.hasDataChanged(any(), any(), any()) } returns true
+        coEvery { cacheManager.cacheMovies(any(), any(), any(), any(), any()) } returns Unit
 
         // Act & Assert
         repository.getPopularMovies(1, false).test {
@@ -103,6 +112,12 @@ class MovieRepositoryImplTest {
     fun `getPopularMovies handles HTTP exception and returns cached data`() = runTest {
         // Arrange
         val cachedMovies = listOf(createTestMovie(1))
+        val cacheResult = MovieCacheManager.CacheResult(
+            movies = cachedMovies,
+            isStale = true,
+            isExpired = false,
+            hasMore = true
+        )
 
         val httpException = mockk<HttpException>(relaxed = true) {
             every { code() } returns 500
@@ -110,9 +125,8 @@ class MovieRepositoryImplTest {
             every { localizedMessage } returns "HTTP 500 Error"
         }
 
-        coEvery { cacheManager.getCachedMovies("popular", 1) } returns cachedMovies
+        coEvery { cacheManager.getCachedMovies("popular", 1) } returns cacheResult
         coEvery { api.getPopularMovies(1) } throws httpException
-        coEvery { cacheManager.cacheMovies(any(), any(), any()) } returns Unit
 
         // Act & Assert
         repository.getPopularMovies(1, false).test {
@@ -128,7 +142,7 @@ class MovieRepositoryImplTest {
             val error = awaitItem()
             assertThat(error).isInstanceOf(Resource.Error::class.java)
             assertThat(error.data).isEqualTo(cachedMovies)
-            assertThat(error.message).isNotEmpty()
+            assertThat(error.message).contains("Server error")
 
             awaitComplete()
         }
@@ -147,11 +161,38 @@ class MovieRepositoryImplTest {
 
             val error = awaitItem()
             assertThat(error).isInstanceOf(Resource.Error::class.java)
-            assertThat(error.message).contains("internet connection")
+            assertThat(error.message).contains("internet")
             assertThat(error.data).isNull()
 
             awaitComplete()
         }
+    }
+
+    @Test
+    fun `getPopularMovies skips API call when cache is fresh`() = runTest {
+        // Arrange
+        val cachedMovies = listOf(createTestMovie(1))
+        val cacheResult = MovieCacheManager.CacheResult(
+            movies = cachedMovies,
+            isStale = false,  // Fresh cache
+            isExpired = false,
+            hasMore = true
+        )
+
+        coEvery { cacheManager.getCachedMovies("popular", 1) } returns cacheResult
+
+        // Act & Assert
+        repository.getPopularMovies(1, false).test {
+            // Only emission: cached data
+            val cached = awaitItem()
+            assertThat(cached).isInstanceOf(Resource.Success::class.java)
+            assertThat(cached.data).isEqualTo(cachedMovies)
+
+            awaitComplete()
+        }
+
+        // Verify API was NOT called
+        coVerify(exactly = 0) { api.getPopularMovies(any()) }
     }
 
     @Test
@@ -163,7 +204,8 @@ class MovieRepositoryImplTest {
 
         coEvery { cacheManager.getCachedMovies("popular", page) } returns null
         coEvery { api.getPopularMovies(page) } returns responseDto
-        coEvery { cacheManager.cacheMovies(any(), any(), any()) } returns Unit
+        coEvery { cacheManager.hasDataChanged(any(), any(), any()) } returns true
+        coEvery { cacheManager.cacheMovies(any(), any(), any(), any(), any()) } returns Unit
 
         // Act & Assert
         repository.getPopularMovies(page, false).test {
@@ -173,7 +215,7 @@ class MovieRepositoryImplTest {
         }
 
         coVerify { api.getPopularMovies(page) }
-        coVerify { cacheManager.cacheMovies("popular", page, any()) }
+        coVerify { cacheManager.cacheMovies("popular", page, any(), 10, any()) }
     }
 
     // ========== Top Rated Movies Tests ==========
@@ -182,11 +224,12 @@ class MovieRepositoryImplTest {
     fun `getTopRatedMovies fetches from API successfully`() = runTest {
         // Arrange
         val movieDtos = listOf(createMovieDto(1), createMovieDto(2))
-        val responseDto = MovieResponseDto(1, movieDtos, 1, 2)
+        val responseDto = MovieResponseDto(1, movieDtos, 10, 40)
 
         coEvery { cacheManager.getCachedMovies("top_rated", 1) } returns null
         coEvery { api.getTopRatedMovies(1) } returns responseDto
-        coEvery { cacheManager.cacheMovies(any(), any(), any()) } returns Unit
+        coEvery { cacheManager.hasDataChanged(any(), any(), any()) } returns true
+        coEvery { cacheManager.cacheMovies(any(), any(), any(), any(), any()) } returns Unit
 
         // Act & Assert
         repository.getTopRatedMovies(1, false).test {
@@ -200,18 +243,19 @@ class MovieRepositoryImplTest {
             awaitComplete()
         }
 
-        coVerify { cacheManager.cacheMovies("top_rated", 1, any()) }
+        coVerify { cacheManager.cacheMovies("top_rated", 1, any(), any(), any()) }
     }
 
     @Test
     fun `getTopRatedMovies uses correct category for caching`() = runTest {
         // Arrange
         val movieDtos = listOf(createMovieDto(1))
-        val responseDto = MovieResponseDto(1, movieDtos, 1, 1)
+        val responseDto = MovieResponseDto(1, movieDtos, 5, 20)
 
         coEvery { cacheManager.getCachedMovies("top_rated", 1) } returns null
         coEvery { api.getTopRatedMovies(1) } returns responseDto
-        coEvery { cacheManager.cacheMovies(any(), any(), any()) } returns Unit
+        coEvery { cacheManager.hasDataChanged(any(), any(), any()) } returns true
+        coEvery { cacheManager.cacheMovies(any(), any(), any(), any(), any()) } returns Unit
 
         // Act
         repository.getTopRatedMovies(1, false).test {
@@ -221,7 +265,7 @@ class MovieRepositoryImplTest {
 
         // Assert
         coVerify { cacheManager.getCachedMovies("top_rated", 1) }
-        coVerify { cacheManager.cacheMovies("top_rated", 1, any()) }
+        coVerify { cacheManager.cacheMovies("top_rated", 1, any(), any(), any()) }
     }
 
     // ========== Now Playing Movies Tests ==========
@@ -230,11 +274,12 @@ class MovieRepositoryImplTest {
     fun `getNowPlayingMovies fetches from API successfully`() = runTest {
         // Arrange
         val movieDtos = listOf(createMovieDto(1))
-        val responseDto = MovieResponseDto(1, movieDtos, 1, 1)
+        val responseDto = MovieResponseDto(1, movieDtos, 3, 60)
 
         coEvery { cacheManager.getCachedMovies("now_playing", 1) } returns null
         coEvery { api.getNowPlayingMovies(1) } returns responseDto
-        coEvery { cacheManager.cacheMovies(any(), any(), any()) } returns Unit
+        coEvery { cacheManager.hasDataChanged(any(), any(), any()) } returns true
+        coEvery { cacheManager.cacheMovies(any(), any(), any(), any(), any()) } returns Unit
 
         // Act & Assert
         repository.getNowPlayingMovies(1, false).test {
@@ -284,7 +329,7 @@ class MovieRepositoryImplTest {
         // Arrange
         val movieId = 456
         val movieDetailDto = createMovieDetailDto(movieId)
-        val largeCastList = (1..20).map { 
+        val largeCastList = (1..20).map {
             CastDto(it, "Actor $it", "Character $it", null)
         }
         val creditsDto = CreditsDto(cast = largeCastList)
@@ -295,7 +340,7 @@ class MovieRepositoryImplTest {
         // Act & Assert
         repository.getMovieDetail(movieId).test {
             skipItems(1) // Skip loading
-            
+
             val success = awaitItem()
             assertThat(success.data?.cast).hasSize(10)
 
@@ -351,7 +396,7 @@ class MovieRepositoryImplTest {
         // Arrange
         val query = "Inception"
         val movieDtos = listOf(createMovieDto(1), createMovieDto(2))
-        val responseDto = MovieResponseDto(1, movieDtos, 1, 2)
+        val responseDto = MovieResponseDto(1, movieDtos, 3, 60)
 
         coEvery { api.searchMovies(query, 1) } returns responseDto
 
@@ -374,7 +419,7 @@ class MovieRepositoryImplTest {
         val query = "Matrix"
         val page = 2
         val movieDtos = listOf(createMovieDto(1))
-        val responseDto = MovieResponseDto(page, movieDtos, 5, 50)
+        val responseDto = MovieResponseDto(page, movieDtos, 5, 100)
 
         coEvery { api.searchMovies(query, page) } returns responseDto
 
