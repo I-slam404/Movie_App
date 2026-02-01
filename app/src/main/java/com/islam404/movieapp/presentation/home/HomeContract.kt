@@ -6,6 +6,7 @@ object HomeContract {
     data class State(
         val isLoading: Boolean = false,
         val isLoadingMore: Boolean = false,
+        val isRefreshing: Boolean = false,
         val movies: List<Movie> = emptyList(),
         val searchQuery: String = "",
         val isSearching: Boolean = false,
@@ -25,7 +26,7 @@ object HomeContract {
         data object LoadMovies : Event()
         data object LoadMoreMovies : Event()
         data class OnSearchQueryChange(val query: String) : Event()
-        data object OnSearchSubmit : Event()  // Keep for keyboard action
+        data object OnSearchSubmit : Event()
         data object ClearSearch : Event()
         data class OnCategoryChange(val category: MovieCategory) : Event()
         data class OnMovieClick(val movieId: Int) : Event()
@@ -36,5 +37,6 @@ object HomeContract {
     sealed class Effect {
         data class NavigateToDetail(val movieId: Int) : Effect()
         data class ShowError(val message: String) : Effect()
+        data class ShowDataUpdated(val message: String) : Effect()
     }
 }

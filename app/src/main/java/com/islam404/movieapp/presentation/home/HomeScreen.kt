@@ -1,30 +1,64 @@
 package com.islam404.movieapp.presentation.home
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.*
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.layout.*
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.islam404.movieapp.presentation.common.components.EmptyContent
 import com.islam404.movieapp.presentation.common.components.ErrorContent
-import com.islam404.movieapp.presentation.common.components.LoadingContent
+import com.islam404.movieapp.presentation.home.components.CategoryTabs
+import com.islam404.movieapp.presentation.home.components.MovieCard
+import com.islam404.movieapp.presentation.home.components.SearchBar
+import com.islam404.movieapp.presentation.home.components.ShimmerMovieCard
+import com.islam404.movieapp.presentation.home.components.ShimmerMovieGrid
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.ui.platform.LocalFocusManager
 import com.ramcosta.composedestinations.generated.destinations.MovieDetailScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
-import com.islam404.movieapp.presentation.home.components.*
 import kotlinx.coroutines.flow.collectLatest
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Destination<RootGraph>(start = true)
@@ -45,16 +79,20 @@ fun HomeScreen(
         }
     }
 
-
     // Detect when user scrolls to bottom for pagination
     val shouldLoadMore by remember {
         derivedStateOf {
-            val lastVisibleItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-            lastVisibleItem != null &&
+            val layoutInfo = listState.layoutInfo
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+
+            val shouldLoad = lastVisibleItem != null &&
                     lastVisibleItem.index >= state.movies.size - 4 &&
                     !state.isLoadingMore &&
                     state.canLoadMore &&
-                    !state.isLoading
+                    !state.isLoading &&
+                    !state.isRefreshing
+
+            shouldLoad
         }
     }
 
@@ -77,6 +115,12 @@ fun HomeScreen(
                         duration = SnackbarDuration.Short
                     )
                 }
+                is HomeContract.Effect.ShowDataUpdated -> {
+                    snackbarHostState.showSnackbar(
+                        message = effect.message,
+                        duration = SnackbarDuration.Short
+                    )
+                }
             }
         }
     }
@@ -85,18 +129,30 @@ fun HomeScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    AnimatedContent(
-                        targetState = if (state.isSearching) "Search Results" else "Movies",
-                        transitionSpec = {
-                            fadeIn() + slideInVertically() togetherWith
-                                    fadeOut() + slideOutVertically()
-                        },
-                        label = "title"
-                    ) { title ->
-                        Text(
-                            text = title,
-                            style = MaterialTheme.typography.headlineSmall
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AnimatedContent(
+                            targetState = if (state.isSearching) "Search Results" else "Movies",
+                            transitionSpec = {
+                                fadeIn() + slideInVertically() togetherWith
+                                        fadeOut() + slideOutVertically()
+                            },
+                            label = "title"
+                        ) { title ->
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.headlineSmall
+                            )
+                        }
+
+                        // Show subtle indicator when refreshing in background
+                        if (state.isRefreshing && state.movies.isNotEmpty()) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -160,11 +216,11 @@ fun HomeScreen(
                     .weight(1f)
             ) {
                 when {
-                    // Initial Loading with Shimmer
+                    // Initial Loading with Shimmer (only if no data)
                     state.isLoading && state.movies.isEmpty() -> {
                         ShimmerMovieGrid()
                     }
-                    // Error State
+                    // Error State (only if no data)
                     state.error != null && state.movies.isEmpty() -> {
                         ErrorContent(
                             message = state.error ?: "Unknown error",
@@ -172,7 +228,7 @@ fun HomeScreen(
                         )
                     }
                     // Empty State
-                    state.movies.isEmpty() -> {
+                    state.movies.isEmpty() && !state.isLoading -> {
                         EmptyContent(isSearching = state.isSearching)
                     }
                     // Success State with Movies
@@ -187,9 +243,7 @@ fun HomeScreen(
                             // Movie Items
                             items(
                                 items = state.movies,
-                                key = { movie ->
-                                    "${movie.id}_${state.movies.indexOf(movie)}"
-                                }
+                                key = { movie -> movie.id }
                             ) { movie ->
                                 MovieCard(
                                     movie = movie,
@@ -213,8 +267,4 @@ fun HomeScreen(
             }
         }
     }
-}
-
-private enum class ContentState {
-    Loading, Error, Empty, Success
 }
